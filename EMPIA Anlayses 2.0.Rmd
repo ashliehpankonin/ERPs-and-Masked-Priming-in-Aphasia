@@ -1,0 +1,931 @@
+---
+title: "EMPIA Analyses 2.0"
+author: "Ashlie"
+date: "2024-08-11"
+output: html_document
+---
+
+```{r setup}
+
+# Libraries
+pacman::p_load(knitr, # rendering of .Rmd file
+               lme4, # model specification/estimation
+               afex, # anova and deriving p-values via LRTs from lmer
+               broom.mixed, # extracting data from model fits
+               faux, # generate correlated values
+               tidyverse, # data wrangling and visualization 
+               ggridges, # visualization
+               viridis, # color schemes for visualization
+               kableExtra, # helps with knitting the .Rmd file
+               cowplot, # visualization tool to include multiple plots
+               ggrain, # visualization tool for raincloud plots
+               dplyr, # data manipulation tools
+               here, # controlling directories/reproducibility
+               tidyr, # formatting package
+               readr, # data importation
+               Hmisc, # visualization
+               emmeans, # estimation of marginal means and contrasts
+               sjstats, # estimation of marginal means and contrasts
+               lmerTest, # deriving p-values from lmer
+               MuMIn, # ?
+               sjPlot, # APA formatting of numerical output
+               car, # data wrangling and visualization,
+               magrittr, # to use %>%
+               ggpubr, # ? (Rose had it in her script)
+               broom, # ? (Rose had it in her script)
+               Matrix, # model specification/estimation,
+               multcomp, # multiple comparison adjustments
+               forcats, # organizing visualizations
+               gtools, # data manipulation/wrangling
+               fuzzySim, # FDR correction,
+               ez, # anova
+               apaTables, # visualization of anova output
+               #renv # package versioning/reproducibility
+               )
+
+# Global theme set
+set.seed(1234) # set random seed for reproducibility
+
+knitr::opts_chunk$set(echo = TRUE, collapse = TRUE)
+
+#theme_set(theme_bw(base_size = 13) + theme(text = element_text(size=13), 
+                             #axis.title=element_text(size=12),
+                             #strip.text = element_text(margin=margin(2,0,2,0)), 
+                             #panel.grid = element_blank()))
+
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE, fig.width=10, fig.height=8, fig.fullwidth=TRUE)
+
+plot_theme <- 
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, size = 18), 
+        axis.text.x = element_text(size = 13), 
+        axis.title.x = element_text(size = 13), 
+        axis.text.y = element_text(size = 12), 
+        axis.title.y = element_text(size = 13),
+        strip.background = element_rect(color="white", fill="white", linewidth = 1.5, linetype="solid"))
+
+options(scipen=999)
+```
+
+# Demographic Data
+## Data Manipulations
+```{r}
+# Load data (1 data frame)
+demo_data <- read.csv(here("SYP Data", "Participant Info.csv"),stringsAsFactors=TRUE) # N400 mean amplitude data
+
+# Format data
+demo_data %<>%
+  mutate(group = factor(Group),
+         fluency = factor(Fluency),
+         sex.c = as.numeric(Sex) - 1.5,
+         age = as.numeric(Age),
+         age.c = as.numeric(scale(Age, center = TRUE, scale = FALSE)),
+         years.since.stroke.c = as.numeric(scale(Years.since.stroke, center = TRUE, scale = FALSE)),
+         WAB.AQ = as.numeric(WAB.AQ),
+         wab.c = as.numeric(scale(WAB.AQ, center = TRUE, scale = FALSE)),
+         BNT = as.numeric(BNT),
+         bnt.c = as.numeric(scale(BNT, center = TRUE, scale = FALSE)),
+         RCPM = as.numeric(RCPM),
+         rcpm.c = as.numeric(scale(RCPM, center = TRUE, scale = FALSE)),
+         RCBA = as.numeric(RCBA),
+         rcba.c = as.numeric(scale(RCBA, center = TRUE, scale = FALSE)),
+         Trails.A.min = as.numeric(Trails.A.min),
+         trailsa.c = as.numeric(scale(Trails.A.min, center = TRUE, scale = FALSE)),
+         Trails.B.min = as.numeric(Trails.B.min),
+         trailsb.c = as.numeric(scale(Trails.B.min, center = TRUE, scale = FALSE)))
+str(demo_data)
+
+# Create some data subsets
+includedsubs_data <- subset(demo_data, Exclude. == "0")
+includedpwa_data <- subset(includedsubs_data, Group == "aphasic")
+includedoc_data <- subset(includedsubs_data, Group == "old control")
+
+# Notes:
+# Group default reference level = aphasic
+# Aphasia Type = fluency; default reference level = fluent
+# For sex, female = -0.5 (after centering), male = 0.5 (after centering)
+```
+
+## Descriptives
+```{r}
+includedsubs_data %>%
+  group_by(Group)%>%
+  summarise_at('age', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+```
+## Analyses
+```{r}
+age_model <- t.test(age ~ Group,includedsubs_data)
+age_model
+```
+
+
+
+
+# Behavioral Data
+## Probe Detection Data
+### Data Manipulations
+```{r}
+# Load data
+Response_Accuracy <- read.csv(here("SYP Data", "Submission 2 Data", "Behavioral Data", "Response Accuracy Data (updated).csv"), stringsAsFactors=TRUE) # probe detection data
+
+# Format data
+Response_Accuracy %<>%
+  mutate(Group = factor(Group), 
+         trial.type = factor(Trial.Type, levels = c("animal prime", "unprimed animal target", "primed animal target")),
+         per_resp = as.numeric(per_resp),        
+         per_resp_arc = as.numeric(per_resp_arc))
+str(Response_Accuracy)
+
+# Create some data subsets
+Response_Accuracy <- subset(Response_Accuracy, exclude. == "0")
+```
+### Descriptives
+```{r}
+Response_Accuracy %>%
+  group_by(Group,trial.type)%>%
+  summarise_at('per_resp', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group,trial.type, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+
+Response_Accuracy %>%
+  group_by(Group)%>%
+  summarise_at('per_resp', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+
+```
+### Analyses
+```{r}
+Response_Accuracy$Group <- relevel(Response_Accuracy$Group, ref = "Old Control")
+#Response_Accuracy$Group <- relevel(Response_Accuracy$Group, ref = "Aphasic")
+
+Response_Accuracy$Trial.Type <- factor(Response_Accuracy$Trial.Type, levels = c("animal prime", "unprimed animal target", "primed animal target"))
+contrasts(Response_Accuracy$Trial.Type)<-contr.treatment(levels(Response_Accuracy$trial.type))/3
+contrasts(Response_Accuracy$Group)<-contr.treatment(levels(Response_Accuracy$Group))/2
+resp_acc <- lmer(per_resp_arc ~ 1+ Group*Trial.Type + (1|Participant.ID), data=Response_Accuracy)
+tab_model(resp_acc, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df = TRUE)
+
+Response_Accuracy$Trial.Type <- factor(Response_Accuracy$Trial.Type, levels = c("unprimed animal target", "primed animal target","animal prime"))
+contrasts(Response_Accuracy$Trial.Type)<-contr.helmert(levels(Response_Accuracy$Trial.Type))/3
+contrasts(Response_Accuracy$Group)<-contr.treatment(levels(Response_Accuracy$Group))/2
+resp_acc <- lmer(per_resp_arc ~ 1+ Group*Trial.Type + (1|Participant.ID), data=Response_Accuracy)
+tab_model(resp_acc, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df = TRUE)
+
+
+# emmeans(resp_acc, pairwise~Group | trial.type, adjust = "none")
+# emmeans(resp_acc, pairwise~trial.type | Group, adjust = "none")
+```
+
+## Reaction Time/Behavarial Priming Effects Data
+### Data Manipulations
+```{r}
+# Load data
+RTs <- read.csv(here("SYP Data", "Submission 2 Data", "Behavioral Data", "RT Data (updated).csv"), stringsAsFactors=TRUE) # behavioral priming (RT) data
+
+# Format data
+RTs %<>%
+  mutate(Group = factor(Group), 
+         target.status = factor(Target.Status),
+         TargetWordRT = as.numeric(TargetWordRT),        
+         resp.type = factor(Response.Type),
+         target.word = factor(TargetWord))
+str(RTs)
+
+RTs <- subset(RTs, Exclude. == "0" & Target.Response.Outlier. == "0" & resp.type == "hit")
+str(RTs)
+```
+
+### Descriptives
+```{r}
+RTs %>%
+  group_by(Group,target.status)%>%
+  summarise_at('PrimeWord.RT', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group,target.status, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+
+RTs %>%
+  group_by(Group)%>%
+  summarise_at('PrimeWord.RT', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+```
+
+### Analyses
+```{r}
+RTs$Group <- relevel(RTs$Group, ref = "Old Control")
+#RTs$Group <- relevel(RTs$Group, ref = "Aphasic")
+RTs$target.status <- relevel(RTs$target.status, ref = "unprimed")
+#RTs$target.status <- relevel(RTs$target.status, ref = "primed")
+
+
+RTs_model <- lmer(PrimeWord.RT ~ 1+ Group*target.status + (1|Participant.ID) + (1|target.word), data=RTs)
+tab_model(RTs_model, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+```
+
+## Recognition Task Data
+### Data Manipulations
+```{r}
+# Load data
+Recog_Data <- read.csv(here("SYP Data", "Submission 1 Data", "Recog Data", "Included Recog Data.csv"), stringsAsFactors=TRUE) # behavioral priming (RT) data
+
+# Format data
+Recog_Data %<>%
+  mutate(Group = factor(Group), 
+         TypeRecog = factor(TypeRecog),
+         PerRecog = as.numeric(PerRecog),
+         pr_arc = as.numeric(pr_arc))
+str(Recog_Data)
+```
+
+### Descriptives/Visualizations
+```{r}
+Recog_Data %>%
+  group_by(Group)%>%
+  summarise_at('pr_arc', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+
+Recog_Data %>%
+  group_by(Group,TypeRecog)%>%
+  summarise_at('pr_arc', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group,TypeRecog, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+
+Recog_Data %>%
+  #mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(TypeRecog, PerRecog, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Percent Recognized") +
+  xlab("Stimulus Type")
+```
+
+### Analyses
+```{r}
+Recog_Data$Group <- relevel(Recog_Data$Group, ref = "Old Control")
+#Recog_Data$Group <- relevel(Recog_Data$Group, ref = "Aphasic")
+ 
+Recog_Data$TypeRecog <- factor(Recog_Data$TypeRecog, levels = c("Foil", "Unmasked", "Masked"))
+contrasts(Recog_Data$TypeRecog)<-contr.treatment(levels(Recog_Data$TypeRecog))/3
+contrasts(Recog_Data$Group)<-contr.treatment(levels(Recog_Data$Group))/2
+recog_acc <- lmer(pr_arc ~ 1+ Group*TypeRecog + (1|Participant.ID), data=Recog_Data)
+tab_model(recog_acc, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df = TRUE)
+
+Recog_Data$TypeRecog <- factor(Recog_Data$TypeRecog, levels = c("Masked", "Unmasked", "Foil"))
+contrasts(Recog_Data$TypeRecog)<-contr.helmert(levels(Recog_Data$TypeRecog))/3
+contrasts(Recog_Data$Group)<-contr.treatment(levels(Recog_Data$Group))/2
+recog_acc <- lmer(pr_arc ~ 1+ Group*TypeRecog + (1|Participant.ID), data=Recog_Data)
+tab_model(recog_acc, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df = TRUE)
+contrasts(Recog_Data$TypeRecog)
+```
+
+
+# ERP Data
+## Artifact Rejection Data
+### Data Manipulations
+```{r}
+# Load data (2 data frames)
+AR_Pers <- read.csv(here("SYP Data","Submission 1 Data", "Artifact Rejection Data", "Artifact Rejection Percentages.csv"),stringsAsFactors=TRUE) # artifact rejection percentage data
+AR_Pers_nototal <- read.csv(here("SYP Data","Submission 1 Data", "Artifact Rejection Data", "Artifact Rejection Percentages.csv"),stringsAsFactors=TRUE) # artifact rejection percentage data without "total" bin
+
+# Format data
+AR_Pers %<>%
+  mutate(Group = factor(Group), 
+         Bin = factor(Bin),
+         TotalPR_arc = as.numeric(TotalPR_arc))
+str(AR_Pers)
+
+AR_Pers_nototal %<>%
+  mutate(Group = factor(Group), 
+         Bin = factor(Bin),
+         TotalPR_arc = as.numeric(TotalPR_arc))
+str(AR_Pers)
+
+# Create some data subsets
+AR_Pers <- subset(AR_Pers, Exclude. == "0") #, Participant.ID != "t117" & Participant.ID != "t125")
+AR_Pers_nototal <- subset(AR_Pers, Exclude. == "0")
+```
+
+### Descriptives
+```{r}
+AR_Pers %>%
+  group_by(Group)%>%
+  summarise_at('TotalPR_arc', 
+               list(~mean(., na.rm=T), 
+                    ~sd(., na.rm=T),
+                    ~median(., na.rm=T),
+                    ~min(., na.rm=T),
+                    ~max(., na.rm=T),
+                    ~sum(!is.na(.))))%>%
+  dplyr::rename("n" = "sum")%>%
+  dplyr::select(Group, n, mean, sd, median, min, max)%>%
+  mutate(total.n = sum(n))%>%
+  knitr::kable()
+```
+### Analyses
+```{r}
+contrasts(AR_Pers_nototal$Bin)<-contr.sum(levels(AR_Pers_nototal$Bin))/9
+contrasts(AR_Pers_nototal$Group)<-contr.sum(levels(AR_Pers_nototal$Group))/2
+
+AR_Pers_model <- lmer(TotalPR_arc ~ 1+ Group*Bin + (1|Participant.ID), data=AR_Pers_nototal)
+tab_model(AR_Pers_model, show.se = TRUE,show.ci = FALSE, show.stat = TRUE)
+
+
+emmeans(AR_Pers_model, pairwise~Group, adjust = "none")
+emmeans(AR_Pers_model, pairwise~Bin, adjust = "none")
+emmeans(AR_Pers_model, pairwise~Group | Bin, adjust = "none")
+
+```
+
+## N400 Data
+### Data Manipulations
+```{r}
+# Load data (2 data frames)
+n400_data <- read.csv(here("SYP Data","Submission 2 Data", "Mean Amplitudes", "N400 Mean Amps.csv"),stringsAsFactors=TRUE) # N400 mean amplitude data
+n400_diffwave_data <- read.csv(here("SYP Data","Submission 2 Data", "Mean Amplitudes", "N400 Diff Waves Data.csv"),stringsAsFactors=TRUE) # N400 difference wave mean amplitude data
+
+# Format data
+n400_data %<>%
+  mutate(Group = factor(Group), 
+         Aphasia.Type = factor(Aphasia.Type),
+         Condition = factor(Condition, levels=c("Non-animal_targets/no_primes","Delayed_masked_primes","Delayed_visible_primes","Immediate_masked_primes","Unrelated_primes")),
+         Prime.Latency = factor(Prime.Latency),
+         Prime.Visibility = factor(Prime.Visibility),
+         Electrode = factor(Electrode),
+         Region = factor(Region),
+         Hemisphere = factor(Hemisphere),
+         Mean.Amplitude = as.numeric(Mean.Amplitude),
+         Component = factor(Component),
+         sex.c = as.numeric(Sex) - 1.5,
+         age.c = as.numeric(scale(Age, center = TRUE, scale = FALSE)),
+         years.since.stroke.c = as.numeric(scale(Years.since.stroke, center = TRUE, scale = FALSE)),
+         WAB.AQ = as.numeric(WAB.AQ),
+         wab.c = as.numeric(scale(WAB.AQ, center = TRUE, scale = FALSE)),
+         BNT = as.numeric(BNT),
+         bnt.c = as.numeric(scale(BNT, center = TRUE, scale = FALSE)),
+         RCPM = as.numeric(RCPM),
+         rcpm.c = as.numeric(scale(RCPM, center = TRUE, scale = FALSE)),
+         RCBA = as.numeric(RCBA),
+         rcba.c = as.numeric(scale(RCBA, center = TRUE, scale = FALSE)),
+         Trails.A.min = as.numeric(Trails.A.min),
+         trailsa.c = as.numeric(scale(Trails.A.min, center = TRUE, scale = FALSE)),
+         Trails.B.min = as.numeric(Trails.B.min),
+         trailsb.c = as.numeric(scale(Trails.B.min, center = TRUE, scale = FALSE)))
+str(n400_data)
+
+n400_diffwave_data %<>%
+  mutate(Group = factor(Group), 
+         Condition = factor(Condition, levels=c("np_minus_dmp","np_minus_dvp","np_minus_imp","up_minus_imp")),
+         Electrode = factor(Electrode),
+         Mean.Amplitude = as.numeric(Mean.Amplitude))
+str(n400_diffwave_data)
+
+# Create some data subsets
+n400chans_data <- subset (n400_data,!grepl('T7|T8|AF3|AF4|Fp1|Fp2|Fpz',Electrode))
+
+# Notes:
+# Aphasia Type = fluency; default reference level = fluent
+# Condition (for N400 data) = target condition; reference level (set above) = non-animal targets/no primes
+# Condition (for N400 difference wave data) = difference wave condition;  reference level (set above) = No Primes - Delayed Masked Primes
+# Region = anteriority/posteriority; default reference level = Central
+# Hemisphere = laterality; default reference level = Left
+# For sex, female = -0.5 (after centering), male = 0.5 (after centering)
+```
+
+### Descriptives
+```{r}
+# N400 mean amplitudes by groupe, condition, region, and hemisphere
+n400_data_grouped1 <- group_by(n400chans_data, Group, Condition, Region, Hemisphere)
+summarise(n400_data_grouped1, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+
+# N400 mean amplitudes by group and condition (collapsed across region and hemisphere)
+n400_data_grouped2 <- group_by(n400chans_data, Group, Condition)
+summarise(n400_data_grouped2, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+```
+
+### Visualizations
+```{r}
+# N400 mean amplitude (collapsed across group, condition, region, and hemisphere)
+hist(n400chans_data$Mean.Amplitude)
+boxplot(n400_data$Mean.Amplitude)
+
+# N400 mean amplitude by group (collapsed across condition, region, and hemisphere)
+plot(Mean.Amplitude ~ Group, data = n400chans_data)
+
+# N400 mean amplitude by condition (collapsed across group, region, and hemisphere)
+plot(Mean.Amplitude ~ Condition, data = n400chans_data)
+
+# N400 mean amplitude by region (collapsed across group, condition, and hemisphere)
+plot(Mean.Amplitude ~ Region, data = n400chans_data)
+
+# N400 mean amplitude by hemisphere (collapsed across group, condition, and region)
+plot(Mean.Amplitude ~ Hemisphere, data = n400chans_data)
+
+# N400 mean amplitude by group and condition (collapsed across region and hemisphere)
+n400chans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("")
+
+# N400 mean amplitude by group and condition and region (collapsed across hemisphere)
+n400chans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Condition") +
+  facet_wrap(~ factor(Region, c("Frontopolar","Frontal","Central","Parietal","Occipital")), nrow = 1)
+
+# N400 mean amplitude by group and condition and hemisphere (collapsed across region)
+n400chans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Condition") +
+  facet_wrap(~ Hemisphere, nrow = 1)
+
+# N400 mean amplitude by group, condition, region, and hemisphere
+n400chans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(x=Condition, y=Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition") +
+  facet_wrap(~Hemisphere + factor(Region, c("Frontopolar","Frontal","Central","Parietal","Occipital")))
+
+# N400 mean amplitude by group and condition
+n400chans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed masked primes
+delayed_masked_data <- subset(n400chans_data, Condition == "Delayed_masked_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+delayed_masked_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Delayed_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed visible primes
+delayed_visible_data <- subset(n400chans_data,  Condition == "Delayed_visible_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+delayed_visible_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Delayed_visible_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed primes
+delayed_data <- subset(n400chans_data, Condition == "Delayed_masked_primes" | Condition == "Delayed_visible_primes")
+delayed_data %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Immediate masked primes
+immediate_data<- subset(n400chans_data, Condition == "Immediate_masked_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+immediate_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Masked primes
+masked_data<- subset(n400chans_data, Condition == "Immediate_masked_primes" | Condition == "Delayed_masked_primes")
+masked_data %>%
+  mutate(Condition = fct_relevel(Condition,"Immediate_masked_primes","Delayed_masked_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# N400 priming difference by group and condition (collapsed across region and hemisphere) - more negative = greater priming effect
+n400_diffwave_data %>%
+  mutate(Condition = fct_relevel(Condition,"np_minus_dvp","np_minus_dmp","up_minus_imp","np_minus_imp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+# Delayed primes comparison
+delayed_diffwaves_data<- subset(n400_diffwave_data, Condition == "np_minus_dvp" | Condition == "np_minus_dmp")
+delayed_diffwaves_data %>%
+  mutate(Condition = fct_relevel(Condition,"np_minus_dvp","np_minus_dmp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+# Masked primes comparison
+masked_diffwaves_data<- subset(n400_diffwave_data, Condition == "up_minus_imp" | Condition == "np_minus_dmp"| Condition == "np_minus_imp")
+masked_diffwaves_data %>%
+  mutate(Condition = fct_relevel(Condition,"up_minus_imp","np_minus_dmp", "np_minus_imp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+```
+
+### Analyses
+```{r}
+n400chans_data$Condition <- factor(n400chans_data$Condition, levels=c("Non-animal_targets/no_primes","Delayed_visible_primes","Delayed_masked_primes","Immediate_masked_primes","Unrelated_primes"))
+contrasts(n400chans_data$Condition)<-contr.treatment(levels(n400chans_data$Condition))/5
+
+# n400chans_data$Condition <- factor(n400chans_data$Condition, levels=c("Delayed_visible_primes","Delayed_masked_primes","Immediate_masked_primes","Unrelated_primes","Non-animal_targets/no_primes"))
+# contrasts(n400chans_data$Condition)<-contr.sdif(levels(n400chans_data$Condition))/5
+
+#n400chans_data$Group <- relevel(n400chans_data$Group, ref = "Old Control")
+n400chans_data$Group <- relevel(n400chans_data$Group, ref = "Aphasic")
+contrasts(n400chans_data$Group)<-contr.treatment(levels(n400chans_data$Group))/2
+
+# Run the model
+n400_omnibus <- lmer(Mean.Amplitude ~ Condition*Group + (1|Participant.ID) + (1|Electrode), data=n400chans_data, REML=FALSE,control=lmerControl(optimizer="bobyqa", optCtrl=list(maxfun=1e6))) 
+tab_model(n400_omnibus, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+
+
+# n400_omnibus_emm <- emmeans(n400_omnibus, pairwise ~ Condition | Group, adjust = "none")
+# n400_omnibus_emm
+# tidy(pairs(n400_omnibus_emm, adjust="none"))%>%
+#    mutate(signif = stars.pval(p.value))
+
+
+n400_diffwave_data$Group <- relevel(n400_diffwave_data$Group, ref = "Old Control")
+n400_diffwave_data$Group <- relevel(n400_diffwave_data$Group, ref = "Aphasic")
+contrasts(n400_diffwave_data$Condition)<-contr.treatment(levels(n400_diffwave_data$Condition))/5
+contrasts(n400_diffwave_data$Group)<-contr.treatment(levels(n400_diffwave_data$Group))/2
+
+# Run the model
+n400_diffwaves <- lmer(Mean.Amplitude ~ Condition*Group + (1|Participant.ID) + (1|Electrode), data=n400_diffwave_data, REML=FALSE,control=lmerControl(optimizer="bobyqa", optCtrl=list(maxfun=1e6))) 
+tab_model(n400_diffwaves, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+```
+
+
+## P300 Data
+### Data Manipulations
+```{r}
+# Load data
+p300_data <- read.csv(here("SYP Data","Submission 2 Data", "Mean Amplitudes", "P300 Mean Amps.csv"),stringsAsFactors=TRUE) # p300 mean amplitude data
+
+# Format data
+p300_data %<>%
+  mutate(Group = factor(Group), 
+         Condition = factor(Condition), #levels=c("Non-animal_targets/no_primes","Delayed_masked_primes","Delayed_visible_primes","Immediate_masked_primes","Unrelated_primes")),
+         Electrode = factor(Electrode),
+         Mean.Amplitude = as.numeric(Mean.Amplitude))
+str(p300_data)
+
+# Create some data subsets
+p300chans_data <- subset (p300_data,!grepl('T7|T8|AF3|AF4|Fp1|Fp2|Fpz',Electrode))
+p300prime_data <-subset(p300chans_data, Condition == "Animal_primes" | Condition == "Non-animal_primes")
+p300target_data <-subset(p300chans_data, Condition == "Non-animal_targets/no_primes" | Condition == "Animal_targets")
+
+# Notes:
+# Condition (for p300 data) = target condition; reference level (set above) = non-animal targets/no primes
+# Condition (for p300 difference wave data) = difference wave condition;  reference level (set above) = No Primes - Delayed Masked Primes
+# Region = anteriority/posteriority; default reference level = Central
+# Hemisphere = laterality; default reference level = Left
+# For sex, female = -0.5 (after centering), male = 0.5 (after centering)
+```
+
+### Descriptives
+```{r}
+# p300 mean amplitudes by groupe, condition, region, and hemisphere
+p300_data_grouped1 <- group_by(p300chans_data, Group, Condition, Region, Hemisphere)
+summarise(p300_data_grouped1, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+
+# p300 mean amplitudes by group and condition (collapsed across region and hemisphere)
+p300_data_grouped2 <- group_by(p300chans_data, Group, Condition)
+summarise(p300_data_grouped2, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+```
+
+### Visualizations
+```{r}
+# p300 mean amplitude by group and condition (collapsed across region and hemisphere)
+p300prime_data %>%
+  mutate(Condition = fct_relevel(Condition,"Animal_primes", "Non-animal_primes","Animal_targets","Non-animal_targets/no_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Prime Type")
+
+# p300 mean amplitude by group and condition (collapsed across region and hemisphere)
+p300target_data %>%
+  mutate(Condition = fct_relevel(Condition,"Animal_primes", "Non-animal_primes","Animal_targets","Non-animal_targets/no_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Target Type")
+
+```
+
+### Analyses
+```{r}
+p300prime_data$Group <- relevel(p300prime_data$Group, ref = "Aphasic")
+#p300prime_data$Group <- relevel(p300prime_data$Group, ref = "Old Control")
+
+# Run the model
+p300_prime_model <- lmer(Mean.Amplitude ~ Condition*Group + (1|Participant.ID) + (1|Electrode), data=p300prime_data, REML=FALSE,control=lmerControl(optimizer="bobyqa", optCtrl=list(maxfun=1e6))) 
+tab_model(p300_prime_model, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+
+
+p300target_data$Group <- relevel(p300target_data$Group, ref = "Aphasic")
+#p300target_data$Group <- relevel(p300target_data$Group, ref = "Old Control")
+
+# Run the model
+p300_target_model <- lmer(Mean.Amplitude ~ Condition*Group + (1|Participant.ID) + (1|Electrode), data=p300target_data, REML=FALSE,control=lmerControl(optimizer="bobyqa", optCtrl=list(maxfun=1e6)))
+tab_model(p300_target_model, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+
+```
+
+## LPC Data
+### Data Manipulations
+```{r}
+# Load data (2 data frames)
+lpc_data <- read.csv(here("SYP Data","Submission 2 Data", "Mean Amplitudes", "lpc Mean Amps.csv"),stringsAsFactors=TRUE) # lpc mean amplitude data
+#lpc_diffwave_data <- read.csv(here("SYP Data","Submission 2 Data", "Mean Amplitudes", "lpc Diff Waves Data.csv"),stringsAsFactors=TRUE) # lpc difference wave mean amplitude data
+
+# Format data
+lpc_data %<>%
+  mutate(Group = factor(Group), 
+         Condition = factor(Condition, levels=c("Non-animal_targets/no_primes","Delayed_masked_primes","Delayed_visible_primes","Immediate_masked_primes","Unrelated_primes")),
+         Electrode = factor(Electrode),
+         Mean.Amplitude = as.numeric(Mean.Amplitude))
+str(lpc_data)
+
+# lpc_diffwave_data %<>%
+#   mutate(Group = factor(Group), 
+#          Condition = factor(Condition, levels=c("np_minus_dmp","np_minus_dvp","np_minus_imp","up_minus_imp")),
+#          Electrode = factor(Electrode),
+#          Mean.Amplitude = as.numeric(Mean.Amplitude))
+# str(lpc_diffwave_data)
+
+# Create some data subsets
+lpcchans_data <- subset (lpc_data,!grepl('T7|T8|AF3|AF4|Fp1|Fp2|Fpz|F3|Fz|F4|FC3|FCz|FC4',Electrode))
+
+# Notes:
+# Condition (for lpc data) = target condition; reference level (set above) = non-animal targets/no primes
+# Condition (for lpc difference wave data) = difference wave condition;  reference level (set above) = No Primes - Delayed Masked Primes
+```
+
+### Descriptives
+```{r}
+# lpc mean amplitudes by groupe, condition, region, and hemisphere
+lpc_data_grouped1 <- group_by(lpcchans_data, Group, Condition, Region, Hemisphere)
+summarise(lpc_data_grouped1, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+
+# lpc mean amplitudes by group and condition (collapsed across region and hemisphere)
+lpc_data_grouped2 <- group_by(lpcchans_data, Group, Condition)
+summarise(lpc_data_grouped2, # summarize operation by group
+  mean = mean(Mean.Amplitude),
+  std = sd(Mean.Amplitude)
+    )
+```
+
+### Visualizations
+```{r}
+# lpc mean amplitude by group and condition (collapsed across region and hemisphere)
+lpcchans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("")
+
+# lpc mean amplitude by group and condition and region (collapsed across hemisphere)
+lpcchans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Condition") +
+  facet_wrap(~ factor(Region, c("Frontopolar","Frontal","Central","Parietal","Occipital")), nrow = 1)
+
+# lpc mean amplitude by group and condition and hemisphere (collapsed across region)
+lpcchans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Condition") +
+  facet_wrap(~ Hemisphere, nrow = 1)
+
+# lpc mean amplitude by group, condition, region, and hemisphere
+lpcchans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(x=Condition, y=Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition") +
+  facet_wrap(~Hemisphere + factor(Region, c("Frontopolar","Frontal","Central","Parietal","Occipital")))
+
+# lpc mean amplitude by group and condition
+lpcchans_data %>%
+  mutate(Condition = fct_relevel(Condition,"Delayed_visible_primes","Delayed_masked_primes","Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed masked primes
+delayed_masked_data <- subset(lpcchans_data, Condition == "Delayed_masked_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+delayed_masked_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Delayed_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed visible primes
+delayed_visible_data <- subset(lpcchans_data,  Condition == "Delayed_visible_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+delayed_visible_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Delayed_visible_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Delayed primes
+delayed_data <- subset(lpcchans_data, Condition == "Delayed_masked_primes" | Condition == "Delayed_visible_primes")
+delayed_data %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Immediate masked primes
+immediate_data<- subset(lpcchans_data, Condition == "Immediate_masked_primes" | Condition == "Unrelated_primes" | Condition == "Non-animal_targets/no_primes")
+immediate_data %>%
+  mutate(Condition = fct_relevel(Condition,"Non-animal_targets/no_primes","Immediate_masked_primes","Unrelated_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# Masked primes
+masked_data<- subset(lpcchans_data, Condition == "Immediate_masked_primes" | Condition == "Delayed_masked_primes")
+masked_data %>%
+  mutate(Condition = fct_relevel(Condition,"Immediate_masked_primes","Delayed_masked_primes")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Mean Amplitude") +
+  xlab("Priming Condition")
+
+# lpc priming difference by group and condition (collapsed across region and hemisphere) - more negative = greater priming effect
+lpc_diffwave_data %>%
+  mutate(Condition = fct_relevel(Condition,"np_minus_dvp","np_minus_dmp","up_minus_imp","np_minus_imp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+# Delayed primes comparison
+delayed_diffwaves_data<- subset(lpc_diffwave_data, Condition == "np_minus_dvp" | Condition == "np_minus_dmp")
+delayed_diffwaves_data %>%
+  mutate(Condition = fct_relevel(Condition,"np_minus_dvp","np_minus_dmp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+# Masked primes comparison
+masked_diffwaves_data<- subset(lpc_diffwave_data, Condition == "up_minus_imp" | Condition == "np_minus_dmp"| Condition == "np_minus_imp")
+masked_diffwaves_data %>%
+  mutate(Condition = fct_relevel(Condition,"up_minus_imp","np_minus_dmp", "np_minus_imp")) %>%
+  ggplot(aes(Condition, Mean.Amplitude, group=Group, color=Group)) +
+  stat_summary(geom="pointrange", fun.data = mean_cl_boot) +
+  stat_summary(geom="line",fun.data = mean_cl_boot)+
+  ylab("Priming Difference") +
+  xlab("Priming Condition") 
+
+```
+
+### Analyses
+```{r}
+lpcchans_data$Condition <- factor(lpcchans_data$Condition, levels=c("Non-animal_targets/no_primes","Delayed_visible_primes","Delayed_masked_primes","Immediate_masked_primes","Unrelated_primes"))
+contrasts(lpcchans_data$Condition)<-contr.treatment(levels(lpcchans_data$Condition))/5
+
+# lpcchans_data$Condition <- factor(lpcchans_data$Condition, levels=c("Delayed_visible_primes","Delayed_masked_primes","Immediate_masked_primes","Unrelated_primes","Non-animal_targets/no_primes"))
+# contrasts(lpcchans_data$Condition)<-contr.sdif(levels(lpcchans_data$Condition))/5
+
+lpcchans_data$Group <- relevel(lpcchans_data$Group, ref = "Old Control")
+#lpcchans_data$Group <- relevel(lpcchans_data$Group, ref = "Aphasic")
+contrasts(lpcchans_data$Group)<-contr.treatment(levels(lpcchans_data$Group))/2
+
+# Run the model
+lpc_omnibus <- lmer(Mean.Amplitude ~ Condition*Group + (1|Participant.ID) + (1|Electrode), data=lpcchans_data, REML=FALSE,control=lmerControl(optimizer="bobyqa", optCtrl=list(maxfun=1e6))) 
+tab_model(lpc_omnibus, show.se = TRUE,show.ci = FALSE, show.stat = TRUE, show.df=TRUE)
+
+```
+
+
+
